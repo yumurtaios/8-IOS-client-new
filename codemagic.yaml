@@ -1,0 +1,153 @@
+# =============================================================================
+#  Yumurta iOS  ·  codemagic.yaml
+#  Проект: YumurtaPremium (SwiftUI, XcodeGen, bundle id ru.marketplace.client.premium)
+#  Репозиторий: github.com/yumurtaios/8-IOS-client-new  (ветка main)
+# =============================================================================
+#
+#  ЧТО НУЖНО ОДИН РАЗ НАСТРОИТЬ В UI, чтобы релизный воркфлоу заработал:
+#
+#  1) App Store Connect API-ключ в Codemagic:
+#       Teams → Integrations → Developer Portal → добавить App Store Connect API key
+#       (Issuer ID + Key ID + .p8). Роль ключа: App Manager или Admin.
+#       Имя интеграции, которое ты задашь, ВПИШИ ниже в поле
+#       integrations.app_store_connect  (сейчас там плейсхолдер YumurtaAppStoreConnect).
+#
+#  2) App ID в Apple Developer (portal → Identifiers):
+#       ru.marketplace.client.premium  с включёнными capability:
+#         • Push Notifications           (в проекте aps-environment = production)
+#         • Associated Domains           (applinks:yumurta.ru)
+#       Иначе автосоздание provisioning-профиля пройдёт, но подпись/экспорт
+#       упадёт из-за несовпадения entitlements.
+#
+#  3) Запись приложения в App Store Connect (bundle id ru.marketplace.client.premium).
+#       После создания — впиши числовой Apple ID приложения в var APP_STORE_APPLE_ID
+#       (нужен для авто-инкремента номера сборки TestFlight).
+#       Для самой первой сборки можно оставить 0 — тогда возьмётся встроенный BUILD_NUMBER.
+#
+#  Team ID (Rovshan Mammadov): Y9Q3SKDB35  — подтягивается автоматически из API-ключа.
+# =============================================================================
+
+workflows:
+
+  # ---------------------------------------------------------------------------
+  # 1. UNSIGNED — быстрая проверка, что код собирается под устройство.
+  #    Без секретов и без подписи. Гоняется на каждый push и pull request.
+  # ---------------------------------------------------------------------------
+  ios-unsigned:
+    name: iOS · Unsigned (compile check)
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: latest
+      vars:
+        XCODE_PROJECT: "YumurtaPremium.xcodeproj"
+        XCODE_SCHEME: "YumurtaPremium"
+    triggering:
+      events:
+        - push
+        - pull_request
+      branch_patterns:
+        - pattern: "*"
+          include: true
+      cancel_previous_builds: true
+    scripts:
+      - name: Generate Xcode project (XcodeGen)
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen generate
+          xcodebuild -project "$XCODE_PROJECT" -list
+      - name: Build without signing
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | xcbeautify
+    artifacts:
+      - /tmp/xcodebuild_logs/*.log
+
+  # ---------------------------------------------------------------------------
+  # 2. APP STORE RELEASE — подписанный архив → .ipa → выгрузка в TestFlight.
+  #    Автоподпись через App Store Connect API-ключ. Триггер — git-тег vX.Y.Z.
+  #    (Вручную из UI можно запустить в любой момент, триггер не обязателен.)
+  # ---------------------------------------------------------------------------
+  ios-appstore-release:
+    name: iOS · App Store release (TestFlight)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: YumurtaAppStoreConnect   # <-- имя твоей интеграции App Store Connect в Codemagic
+    environment:
+      xcode: latest
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: ru.marketplace.client.premium
+      vars:
+        XCODE_PROJECT: "YumurtaPremium.xcodeproj"
+        XCODE_SCHEME: "YumurtaPremium"
+        BUNDLE_ID: "ru.marketplace.client.premium"
+        APP_STORE_APPLE_ID: 0    # <-- числовой Apple ID приложения в App Store Connect (0 = взять встроенный BUILD_NUMBER)
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: "v*"
+          include: true
+      cancel_previous_builds: false
+    scripts:
+      - name: Generate Xcode project (XcodeGen)
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen generate
+          xcodebuild -project "$XCODE_PROJECT" -list
+      - name: Fetch signing files & apply profiles
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          xcode-project use-profiles
+      - name: Determine build number
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ "${APP_STORE_APPLE_ID}" != "0" ] && [ -n "${APP_STORE_APPLE_ID}" ]; then
+            LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" --platform IOS 2>/dev/null || echo 0)
+            NEW_BUILD_NUMBER=$(( LATEST + 1 ))
+          else
+            NEW_BUILD_NUMBER="$BUILD_NUMBER"
+          fi
+          echo "NEW_BUILD_NUMBER=$NEW_BUILD_NUMBER" >> "$CM_ENV"
+          echo "Build number for this run: $NEW_BUILD_NUMBER"
+      - name: Build signed IPA for App Store
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --config Release \
+            --archive-xcargs "COMPILER_INDEX_STORE_ENABLE=NO CURRENT_PROJECT_VERSION=$NEW_BUILD_NUMBER"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        # submit_to_app_store: true   # включи, когда будешь готов автоматически подавать на ревью
+      # email:
+      #   recipients:
+      #     - you@example.com
+      #   notify:
+      #     success: true
+      #     failure: true
