@@ -369,10 +369,10 @@ struct OrderDetailView: View {
 // MARK: - TimelineRow (кружки шагов + соединительная линия)
 
 private struct TimelineRow: View {
-    enum State { case done, active, todo }
+    enum StepState { case done, active, todo }
     let title: String
     let time: String
-    let state: State
+    let state: StepState
     let isLast: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

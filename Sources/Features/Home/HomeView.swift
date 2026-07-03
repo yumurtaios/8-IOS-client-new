@@ -328,10 +328,10 @@ struct HomeView: View {
 
     private func favBinding(shop id: Int) -> Binding<Bool> {
         Binding(get: { favShops.contains(id) },
-                set: { $0 ? favShops.insert(id) : favShops.remove(id) })
+                set: { if $0 { favShops.insert(id) } else { favShops.remove(id) } })
     }
     private func favBinding(popular uid: String) -> Binding<Bool> {
         Binding(get: { favPopular.contains(uid) },
-                set: { $0 ? favPopular.insert(uid) : favPopular.remove(uid) })
+                set: { if $0 { favPopular.insert(uid) } else { favPopular.remove(uid) } })
     }
 }
