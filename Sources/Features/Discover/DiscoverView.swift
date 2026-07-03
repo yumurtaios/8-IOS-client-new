@@ -507,7 +507,7 @@ private struct CategoriesSection: View {
         .onChange(of: tab) { _ in Task { await load() } }
     }
 
-    @ViewBuilder private func grid<Content: View>(count: Int, @ViewBuilder _ cell: () -> Content) -> some View {
+    @ViewBuilder private func grid<Content: View>(count: Int, @ViewBuilder _ cell: @escaping () -> Content) -> some View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: YMSpace.md),
                             GridItem(.flexible(), spacing: YMSpace.md)], spacing: YMSpace.md) {
             ForEach(0..<count, id: \.self) { _ in cell() }
